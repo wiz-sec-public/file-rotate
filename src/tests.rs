@@ -30,7 +30,7 @@ fn timestamp_max_files_rotation() {
         ContentLimit::Lines(2),
         Compression::None,
         None,
-    );
+    ).unwrap();
 
     // Write 9 lines
     // This should result in 5 files in total (4 rotated files). The main file will have one line.
@@ -85,7 +85,7 @@ fn timestamp_max_age_deletion() {
         ContentLimit::Lines(1),
         Compression::None,
         None,
-    );
+    ).unwrap();
     writeln!(log, "trigger\nat\nleast\none\nrotation").unwrap();
 
     let mut filenames = fs::read_dir(dir)
@@ -111,7 +111,7 @@ fn count_max_files_rotation() {
         ContentLimit::Lines(2),
         Compression::None,
         None,
-    );
+    ).unwrap();
 
     // Write 9 lines
     // This should result in 5 files in total (4 rotated files). The main file will have one line.
@@ -152,7 +152,7 @@ fn rotate_to_deleted_directory() {
         ContentLimit::Lines(1),
         Compression::None,
         None,
-    );
+    ).unwrap();
 
     write!(log, "a\nb\n").unwrap();
     assert_eq!("", fs::read_to_string(&log_path).unwrap());
@@ -182,7 +182,7 @@ fn write_complete_record_until_bytes_surpassed() {
         ContentLimit::BytesSurpassed(1),
         Compression::None,
         None,
-    );
+    ).unwrap();
 
     write!(log, "0123456789").unwrap();
     log.flush().unwrap();
@@ -207,7 +207,7 @@ fn test_wrapping_sanity(content_limit: ContentLimit) {
         content_limit,
         Compression::None,
         None,
-    );
+    ).unwrap();
 
     write!(log, "0123456789\n").unwrap();
     log.flush().unwrap();
@@ -249,7 +249,7 @@ fn test_soft_wrap_edge_cases() {
         ContentLimit::BytesSoftWrap(5, b'\n'),
         Compression::None,
         None,
-    );
+    ).unwrap();
 
     // Simple wrap case
     write!(log, "A\nB\nC\nD\nE\n").unwrap();
@@ -293,7 +293,7 @@ fn test_soft_wrap_dirty_corrupted_file() {
         ContentLimit::BytesSoftWrap(5, b'\n'),
         Compression::None,
         None,
-    );
+    ).unwrap();
     // Current file should be empty
     assert_eq!("", fs::read_to_string(&log_path).unwrap());
     // Rotated file should contain the partial write
@@ -318,7 +318,7 @@ fn test_soft_wrap_dirty_intact_file() {
         ContentLimit::BytesSoftWrap(5, b'\n'),
         Compression::None,
         None,
-    );
+    ).unwrap();
     // Current file is instact - so we continue writing to it
     assert_eq!("A\n", fs::read_to_string(&log_path).unwrap());
     // No rotations should have been done
@@ -337,7 +337,7 @@ fn test_soft_wrap_empty_buffer() {
         ContentLimit::BytesSoftWrap(5, b'\n'),
         Compression::None,
         None,
-    );
+    ).unwrap();
 
     write!(log, "").unwrap();
     assert_eq!(log.log_paths().len(), 0);
@@ -356,7 +356,7 @@ fn test_soft_wrap_lazy_fox() {
         ContentLimit::BytesSoftWrap(10, b' '),
         Compression::None,
         None,
-    );
+    ).unwrap();
     write!(log, "The quick brown fox jumps over the lazy dog").unwrap();
     let lines: Vec<_> = log
         .log_paths()
@@ -385,7 +385,7 @@ fn compression_on_rotation() {
             compression: CompressionType::default(),
         },
         None,
-    );
+    ).unwrap();
 
     writeln!(log, "A").unwrap();
     writeln!(log, "B").unwrap();
@@ -429,7 +429,7 @@ fn no_truncate() {
             ContentLimit::Lines(10000),
             Compression::None,
             None,
-        )
+        ).unwrap()
     };
     writeln!(file_rotate(), "A").unwrap();
     list(parent);
@@ -457,7 +457,7 @@ fn do_truncate() {
             ContentLimit::Lines(10000),
             Compression::None,
             Some(open_file_params),
-        )
+        ).unwrap()
     };
     writeln!(file_rotate(), "A").unwrap();
     list(parent);
@@ -483,7 +483,7 @@ fn byte_count_recalculation() {
         ContentLimit::Bytes(2),
         Compression::None,
         None,
-    );
+    ).unwrap();
 
     write!(file_rotate, "bc").unwrap();
     assert_eq!(file_rotate.log_paths().len(), 1);
@@ -511,7 +511,7 @@ fn line_count_recalculation() {
         ContentLimit::Lines(2),
         Compression::None,
         None,
-    );
+    ).unwrap();
 
     // A single line existed before the new logger ('a')
     assert_eq!(file_rotate.count, 1);
@@ -551,7 +551,7 @@ fn unix_file_permissions() {
             ContentLimit::Lines(2),
             Compression::None,
             Some(open_file_params),
-        );
+        ).unwrap();
 
         // Trigger a rotation by writing three lines
         writeln!(file_rotate, "a").unwrap();
@@ -582,7 +582,7 @@ fn manual_rotation() {
         ContentLimit::None,
         Compression::None,
         None,
-    );
+    ).unwrap();
     writeln!(log, "A").unwrap();
     log.rotate().unwrap();
     list(parent);
@@ -609,7 +609,7 @@ fn arbitrary_lines(count: usize) {
         ContentLimit::Lines(count),
         Compression::None,
         None,
-    );
+    ).unwrap();
 
     for _ in 0..count - 1 {
         writeln!(log).unwrap();
@@ -634,7 +634,7 @@ fn arbitrary_bytes(count: usize) {
         ContentLimit::Bytes(count),
         Compression::None,
         None,
-    );
+    ).unwrap();
 
     for _ in 0..count {
         write!(log, "0").unwrap();
@@ -718,7 +718,7 @@ fn test_file_limit() {
         ContentLimit::Time(TimeFrequency::Daily),
         Compression::None,
         None,
-    );
+    ).unwrap();
 
     mock_time::set_mock_time(first);
     writeln!(log, "1").unwrap();
@@ -746,7 +746,7 @@ fn test_panic() {
             ContentLimit::None,
             Compression::None,
             None,
-        );
+        ).unwrap();
 
         write!(log, "nineteen characters").unwrap();
     }
@@ -758,7 +758,7 @@ fn test_panic() {
         ContentLimit::Bytes(8),
         Compression::None,
         None,
-    );
+    ).unwrap();
 
     write!(log, "0123").unwrap();
 
@@ -789,7 +789,7 @@ fn timestamp_rotation_after_clock_skew() {
         ContentLimit::None,
         Compression::None,
         None,
-    );
+    ).unwrap();
 
     writeln!(log, "first").unwrap();
     log.rotate().unwrap();
@@ -840,7 +840,7 @@ fn test_time_frequency(
         ContentLimit::Time(frequency),
         Compression::None,
         None,
-    );
+    ).unwrap();
 
     writeln!(log, "a").unwrap();
     log.flush().unwrap();

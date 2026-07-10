@@ -12,7 +12,7 @@ fn main() {
         ContentLimit::Time(TimeFrequency::Daily),
         Compression::None,
         None,
-    );
+    ).unwrap();
 
     // Write a bunch of lines
     writeln!(log, "Line 1: Hello World!").expect("write log");

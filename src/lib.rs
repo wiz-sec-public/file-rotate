@@ -30,7 +30,7 @@
 //!     ContentLimit::Lines(3),
 //!     Compression::None,
 //!     None,
-//! );
+//! ).unwrap();
 //!
 //! // Write a bunch of lines
 //! writeln!(log, "Line 1: Hello World!");
@@ -62,7 +62,7 @@
 //!     ContentLimit::Bytes(5),
 //!     Compression::None,
 //!     None,
-//! );
+//! ).unwrap();
 //!
 //! writeln!(log, "Test file");
 //!
@@ -98,7 +98,7 @@
 //!     ContentLimit::Bytes(1),
 //!     Compression::None,
 //!     None,
-//! );
+//! ).unwrap();
 //!
 //! write!(log, "A");
 //! assert_eq!("A", fs::read_to_string(&log_path).unwrap());
@@ -156,7 +156,7 @@
 //!     ContentLimit::Bytes(1),
 //!     Compression::None,
 //!     None,
-//! );
+//! ).unwrap();
 //!
 //! write!(log, "A");
 //! assert_eq!("A", fs::read_to_string(&log_path).unwrap());
@@ -423,6 +423,11 @@ impl<S: SuffixScheme> FileRotate<S> {
     ///
     /// `content_limit` specifies the limits for rotating a file.
     ///
+    /// # Errors
+    ///
+    /// Returns an error if the parent directory of `path` cannot be created,
+    /// or if creating/opening the log file fails.
+    ///
     /// # Panics
     ///
     /// Panics if `bytes == 0` or `lines == 0`.
@@ -432,7 +437,7 @@ impl<S: SuffixScheme> FileRotate<S> {
         content_limit: ContentLimit,
         compression: Compression,
         open_file_params: Option<OpenFileParams>,
-    ) -> Self {
+    ) -> io::Result<Self> {
         match content_limit {
             ContentLimit::Bytes(bytes) => {
                 assert!(bytes > 0);
@@ -454,7 +459,6 @@ impl<S: SuffixScheme> FileRotate<S> {
         };
 
         let basepath = path.as_ref().to_path_buf();
-        fs::create_dir_all(basepath.parent().unwrap()).expect("create dir");
 
         let open_file_params = open_file_params.unwrap_or_default();
 
@@ -472,10 +476,10 @@ impl<S: SuffixScheme> FileRotate<S> {
             #[cfg(feature = "notify")]
             notif_channel: None,
         };
-        s.ensure_log_directory_exists();
+        s.ensure_log_directory_exists()?;
         s.scan_suffixes();
 
-        s
+        Ok(s)
     }
 
     fn peek_last_byte(mut reader: impl Read + Seek) -> Option<u8> {
@@ -489,10 +493,10 @@ impl<S: SuffixScheme> FileRotate<S> {
         result.ok().and_then(|_| Some(buf[0]))
     }
 
-    fn ensure_log_directory_exists(&mut self) {
+    fn ensure_log_directory_exists(&mut self) -> io::Result<()> {
         let path = self.basepath.parent().unwrap();
         if !path.exists() {
-            let _ = fs::create_dir_all(path).expect("create dir");
+            fs::create_dir_all(path)?;
             self.scan_suffixes();
         }
         if !self.basepath.exists() || self.file.is_none() {
@@ -538,6 +542,7 @@ impl<S: SuffixScheme> FileRotate<S> {
                 }
             }
         }
+        Ok(())
     }
 
     fn open_file(&mut self) {
@@ -644,7 +649,7 @@ impl<S: SuffixScheme> FileRotate<S> {
     /// Trigger a log rotation manually. This is mostly intended for use with `ContentLimit::None`
     /// but will work with all content limits.
     pub fn rotate(&mut self) -> io::Result<PathBuf> {
-        self.ensure_log_directory_exists();
+        self.ensure_log_directory_exists()?;
 
         let _ = self.file.take();
 
