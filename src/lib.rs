@@ -501,51 +501,50 @@ impl<S: SuffixScheme> FileRotate<S> {
         }
         if !self.basepath.exists() || self.file.is_none() {
             // Open or create the file
-            self.open_file();
+            self.open_file()?;
 
-            match self.file {
-                None => self.count = 0,
-                Some(ref mut file) => {
-                    match self.content_limit {
-                        ContentLimit::Bytes(_)
-                        | ContentLimit::BytesSurpassed(_)
-                        | ContentLimit::BytesWithSuffix(_, _) => {
-                            // Update byte `count`
-                            if let Ok(metadata) = file.metadata() {
-                                self.count = metadata.len() as usize;
-                                self.last_valid_ofs = self.count;
-                            } else {
-                                self.count = 0;
-                            }
-                        }
-                        ContentLimit::BytesSoftWrap(_, separator) => {
-                            // Update byte `count`
-                            if let Ok(metadata) = file.metadata() {
-                                self.count = metadata.len() as usize;
-                                // If we opened a dirty file with a partial write,
-                                // rotate it to avoid further data loss
-                                if self.count > 0 && Self::peek_last_byte(file) != Some(separator) {
-                                    _ = self.rotate();
-                                }
-                            } else {
-                                self.count = 0;
-                            }
-                        }
-                        ContentLimit::Lines(_) => {
-                            self.count = BufReader::new(file).lines().count();
-                        }
-                        ContentLimit::Time(_) => {
-                            self.modified = mtime(file);
-                        }
-                        ContentLimit::None => {}
+            let file = self
+                .file
+                .as_mut()
+                .expect("open_file() returned Ok without setting self.file");
+            match self.content_limit {
+                ContentLimit::Bytes(_)
+                | ContentLimit::BytesSurpassed(_)
+                | ContentLimit::BytesWithSuffix(_, _) => {
+                    // Update byte `count`
+                    if let Ok(metadata) = file.metadata() {
+                        self.count = metadata.len() as usize;
+                        self.last_valid_ofs = self.count;
+                    } else {
+                        self.count = 0;
                     }
                 }
+                ContentLimit::BytesSoftWrap(_, separator) => {
+                    // Update byte `count`
+                    if let Ok(metadata) = file.metadata() {
+                        self.count = metadata.len() as usize;
+                        // If we opened a dirty file with a partial write,
+                        // rotate it to avoid further data loss
+                        if self.count > 0 && Self::peek_last_byte(file) != Some(separator) {
+                            _ = self.rotate();
+                        }
+                    } else {
+                        self.count = 0;
+                    }
+                }
+                ContentLimit::Lines(_) => {
+                    self.count = BufReader::new(file).lines().count();
+                }
+                ContentLimit::Time(_) => {
+                    self.modified = mtime(file);
+                }
+                ContentLimit::None => {}
             }
         }
         Ok(())
     }
 
-    fn open_file(&mut self) {
+    fn open_file(&mut self) -> io::Result<()> {
         let mut open_options = OpenOptions::new();
 
         open_options.read(true).write(true).create(true);
@@ -561,7 +560,8 @@ impl<S: SuffixScheme> FileRotate<S> {
             open_options.mode(mode);
         }
 
-        self.file = open_options.open(&self.basepath).ok();
+        self.file = Some(open_options.open(&self.basepath)?);
+        Ok(())
     }
 
     fn notify_rotated_log_file(&self, #[allow(unused_variables)] path: PathBuf) {
@@ -658,7 +658,7 @@ impl<S: SuffixScheme> FileRotate<S> {
         let p = new_suffix_info.to_path(&self.basepath).into();
         self.suffixes.insert(new_suffix_info);
 
-        self.open_file();
+        self.open_file()?;
 
         self.count = 0;
         self.last_valid_ofs = 0;
