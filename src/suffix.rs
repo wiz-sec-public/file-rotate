@@ -90,10 +90,43 @@ pub trait SuffixScheme {
             let (filename, compression_suffix) = prepare_filename(&*filename);
             let suffix_str = filename.strip_prefix(&format!("{}.", filename_prefix));
             if let Some(suffix) = suffix_str.and_then(|s| self.parse(s)) {
-                suffixes.insert(SuffixInfo {
+                let candidate = SuffixInfo {
                     suffix,
                     compression_suffix,
-                });
+                };
+                // If an entry with the same suffix is already in the set, both the uncompressed
+                // and compressed variants exist on disk — a prior run crashed somewhere in
+                // compress(). Prefer the uncompressed source and delete the compressed variant:
+                // compress() writes the destination in place (no tmp+rename), so a crash between
+                // opening dest and encoder.finish() leaves a truncated / partial-frame archive
+                // beside the intact source. Keeping the source lets handle_old_files re-compress
+                // it cleanly on the next rotation; keeping the archive risks shipping a corrupt
+                // file. Preserves the "one entry per suffix" invariant.
+                if let Some(existing) = suffixes.get(&candidate).cloned() {
+                    let (winner, loser) = if candidate.compression_suffix.is_none() {
+                        (candidate, existing)
+                    } else {
+                        (existing, candidate)
+                    };
+                    let loser_path = loser.to_path(&basepath);
+                    let winner_path = winner.to_path(&basepath);
+                    tracing::warn!(
+                        kept = %winner_path.display(),
+                        kept_size = ?std::fs::metadata(&winner_path).map(|m| m.len()).ok(),
+                        deleted = %loser_path.display(),
+                        deleted_size = ?std::fs::metadata(&loser_path).map(|m| m.len()).ok(),
+                        "found both uncompressed and compressed variants of same rotated file; \
+                         deleting compressed variant (possibly partial) so the source can be \
+                         re-compressed",
+                    );
+                    if let Err(e) = std::fs::remove_file(&loser_path) {
+                        tracing::warn!(path = %loser_path.display(), error = %e,
+                            "failed to remove compressed variant");
+                    }
+                    suffixes.replace(winner);
+                } else {
+                    suffixes.insert(candidate);
+                }
             }
         }
         suffixes
