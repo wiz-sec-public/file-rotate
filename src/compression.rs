@@ -54,10 +54,32 @@ pub(crate) fn compress(path: &Path, compression: &CompressionType) -> io::Result
     let dest_path = PathBuf::from(format!("{}.{}", path.display(), compression.suffix()));
 
     let mut src_file = File::open(path)?;
+
+    // If the destination already exists, log its state before we overwrite it.
+    // Combined with the .truncate(true) below this is only diagnostic; without
+    // truncate, a shorter re-compression would leave the tail of the old file
+    // in place and yield an invalid concatenation (e.g. a valid zstd frame
+    // followed by stale bytes that don't start with the zstd magic).
+    if let Ok(dest_md) = fs::metadata(&dest_path) {
+        let src_size = fs::metadata(path).map(|m| m.len()).ok();
+        let dest_mtime = dest_md
+            .modified()
+            .ok()
+            .map(chrono::DateTime::<chrono::Utc>::from);
+        tracing::warn!(
+            dest = %dest_path.display(),
+            dest_size = dest_md.len(),
+            ?dest_mtime,
+            src = %path.display(),
+            src_size = ?src_size,
+            "compressing over pre-existing destination file",
+        );
+    }
+
     let dest_file = OpenOptions::new()
         .write(true)
         .create(true)
-        .append(false)
+        .truncate(true)
         .open(&dest_path)?;
 
     assert!(path.exists());
