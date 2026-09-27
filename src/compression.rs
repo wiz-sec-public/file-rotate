@@ -50,16 +50,36 @@ pub enum Compression {
     },
 }
 
+/// Sibling scratch file that `compress` writes into before renaming it to
+/// `dest_path`: `/logs/app.123.zst` -> `/logs/.app.123.zst.compressing`.
+///
+/// The leading dot keeps it out of the way of everyone who might be watching
+/// the directory: `Suffix::scan_suffixes` only considers names starting with
+/// the base file name, and a plain `<base>.*` glob — which is how consumers
+/// typically pick up rotated archives — skips dotfiles as well.
+fn compressing_path(dest_path: &Path) -> PathBuf {
+    let name = dest_path
+        .file_name()
+        .expect("dest_path.file_name()")
+        .to_string_lossy();
+    dest_path.with_file_name(format!(".{name}.compressing"))
+}
+
 pub(crate) fn compress(path: &Path, compression: &CompressionType) -> io::Result<PathBuf> {
     let dest_path = PathBuf::from(format!("{}.{}", path.display(), compression.suffix()));
+    // Compress into a scratch file and rename it into place, so `dest_path`
+    // only ever names a complete archive. Writing the destination directly
+    // would let anyone scanning the directory observe — and consume, or
+    // delete — a half-written file under its final name, and would leave a
+    // truncated archive behind if we crashed mid-compression.
+    let compressing_path = compressing_path(&dest_path);
 
     let mut src_file = File::open(path)?;
 
-    // If the destination already exists, log its state before we overwrite it.
-    // Combined with the .truncate(true) below this is only diagnostic; without
-    // truncate, a shorter re-compression would leave the tail of the old file
-    // in place and yield an invalid concatenation (e.g. a valid zstd frame
-    // followed by stale bytes that don't start with the zstd magic).
+    // Purely diagnostic: the rename below replaces the destination wholesale,
+    // so a pre-existing archive is not a correctness problem. It does mean we
+    // are re-compressing a rotation we already archived once, which is worth
+    // noticing.
     if let Ok(dest_md) = fs::metadata(&dest_path) {
         let src_size = fs::metadata(path).map(|m| m.len()).ok();
         let dest_mtime = dest_md
@@ -76,14 +96,24 @@ pub(crate) fn compress(path: &Path, compression: &CompressionType) -> io::Result
         );
     }
 
+    // A leftover scratch file means a previous compression of this same
+    // rotation died before the rename. Truncating it below is the recovery.
+    if let Ok(md) = fs::metadata(&compressing_path) {
+        tracing::warn!(
+            path = %compressing_path.display(),
+            size = md.len(),
+            "found leftover scratch file from an interrupted compression; overwriting",
+        );
+    }
+
     let dest_file = OpenOptions::new()
         .write(true)
         .create(true)
         .truncate(true)
-        .open(&dest_path)?;
+        .open(&compressing_path)?;
 
     assert!(path.exists());
-    assert!(dest_path.exists());
+    assert!(compressing_path.exists());
 
     match compression {
         CompressionType::Gzip(level) => {
@@ -108,6 +138,11 @@ pub(crate) fn compress(path: &Path, compression: &CompressionType) -> io::Result
         }
     }
 
+    // Publish the finished archive atomically, then drop the source. Crashing
+    // between the two leaves both variants of the rotation on disk, which
+    // `Suffix::scan_suffixes` reconciles; crashing before the rename leaves the
+    // source plus a scratch file, and the next rotation re-compresses it.
+    fs::rename(&compressing_path, &dest_path)?;
     fs::remove_file(path)?;
 
     Ok(dest_path)

@@ -416,6 +416,84 @@ fn compression_on_rotation() {
     assert_eq!("C\n", fs::read_to_string(&log.log_paths()[2]).unwrap());
 }
 
+/// Compression publishes the archive with a rename, so the scratch file it
+/// writes into must not survive a successful rotation.
+#[test]
+fn compression_leaves_no_scratch_files() {
+    let tmp_dir = TempDir::new().unwrap();
+    let parent = tmp_dir.path();
+    let mut log = FileRotate::new(
+        &*parent.join("log").to_string_lossy(),
+        AppendCount::new(3),
+        ContentLimit::Lines(1),
+        Compression::OnRotate {
+            keep_uncompressed: 0,
+            compression: CompressionType::default(),
+        },
+        None,
+    )
+    .unwrap();
+
+    writeln!(log, "A").unwrap();
+    writeln!(log, "B").unwrap();
+
+    assert_eq!(
+        log.log_paths(),
+        vec![parent.join("log.2.gz"), parent.join("log.1.gz")]
+    );
+    let leftovers = fs::read_dir(parent)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.ends_with(".compressing"))
+        .collect::<Vec<_>>();
+    assert!(
+        leftovers.is_empty(),
+        "scratch files left behind: {leftovers:?}"
+    );
+}
+
+/// A scratch file left by a compression that died before its rename is not a
+/// rotated file: `scan_suffixes` must not pick it up, and the next compression
+/// of that rotation must overwrite it and still produce a valid archive.
+#[test]
+fn leftover_scratch_file_is_ignored_and_recovered() {
+    let tmp_dir = TempDir::new().unwrap();
+    let parent = tmp_dir.path();
+    // Stands in for a crash between opening the scratch file and renaming it.
+    let scratch = parent.join(".log.1.gz.compressing");
+    fs::write(&scratch, b"partial gzip garbage").unwrap();
+
+    let mut log = FileRotate::new(
+        &*parent.join("log").to_string_lossy(),
+        AppendCount::new(3),
+        ContentLimit::Lines(1),
+        Compression::OnRotate {
+            keep_uncompressed: 0,
+            compression: CompressionType::default(),
+        },
+        None,
+    )
+    .unwrap();
+
+    writeln!(log, "A").unwrap();
+    writeln!(log, "B").unwrap();
+
+    // The scratch file was reused for each rotation and renamed away.
+    assert!(!scratch.exists());
+    assert_eq!(
+        log.log_paths(),
+        vec![parent.join("log.2.gz"), parent.join("log.1.gz")]
+    );
+
+    // The archive that overwrote the leftover scratch content is a valid gzip.
+    let mut decoder =
+        flate2::read::GzDecoder::new(fs::File::open(parent.join("log.2.gz")).unwrap());
+    let mut decoded = String::new();
+    decoder.read_to_string(&mut decoded).unwrap();
+    assert_eq!(decoded, "A\n");
+}
+
 #[test]
 fn no_truncate() {
     // Don't truncate log file if it already exists
