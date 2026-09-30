@@ -5,7 +5,7 @@
 //!
 use super::now;
 use crate::SuffixInfo;
-use chrono::{format::ParseErrorKind, offset::Local, Duration, NaiveDateTime};
+use chrono::{format::ParseErrorKind, Duration, NaiveDateTime};
 use std::{
     cmp::Ordering,
     collections::BTreeSet,
@@ -193,7 +193,7 @@ pub enum DateFrom {
     Now,
 }
 
-/// Append current timestamp as suffix when rotating files.
+/// Append the current UTC timestamp as suffix when rotating files.
 /// If the timestamp already exists, an additional number is appended.
 ///
 /// Current limitations:
@@ -283,7 +283,7 @@ impl SuffixScheme for AppendTimestamp {
                 _ => {}
             };
 
-            let mut fmt_now = now.format(self.format).to_string();
+            let mut fmt_now = now.with_timezone(&chrono::Utc).format(self.format).to_string();
 
             let number = if let Some(newest_suffix) = newest_suffix {
                 if newest_suffix.timestamp == fmt_now {
@@ -339,7 +339,10 @@ impl SuffixScheme for AppendTimestamp {
         match self.file_limit {
             FileLimit::MaxFiles(max_files) => file_number >= max_files,
             FileLimit::Age(age) => {
-                let old_timestamp = (Local::now() - age).format(self.format).to_string();
+                let old_timestamp = (now() - age)
+                    .with_timezone(&chrono::Utc)
+                    .format(self.format)
+                    .to_string();
                 suffix.timestamp < old_timestamp
             }
             FileLimit::Unlimited => false,
