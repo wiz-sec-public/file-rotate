@@ -2,9 +2,9 @@ name: Rust
 
 on:
   push:
-    branches: [ master, make-fallible, utc-timestamps ]
+    branches: [ master, make-fallible, utc-timestamps, utc-copy-truncate ]
   pull_request:
-    branches: [ master ]
+    branches: [ master, make-fallible ]
 
 env:
   CARGO_TERM_COLOR: always
@@ -31,4 +31,4 @@ jobs:
     steps:
     - uses: actions/checkout@v3
     - name: Test
-      run: cargo test
+      run: cargo test --all-features
