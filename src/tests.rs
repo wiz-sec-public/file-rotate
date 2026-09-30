@@ -870,3 +870,92 @@ fn test_time_frequency(
         Some(&test_suffix)
     );
 }
+
+#[test]
+fn copy_truncate_preserves_external_handle_and_count_retention() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("log");
+    let mut external = OpenOptions::new().create(true).append(true).open(&path).unwrap();
+    let mut log = FileRotate::new(
+        &path, AppendCount::new(2), ContentLimit::None, Compression::None, None,
+    ).unwrap();
+
+    for text in ["first", "second", "third"] {
+        writeln!(external, "{}", text).unwrap();
+        log.rotate_copy_truncate().unwrap();
+        assert_eq!(external.metadata().unwrap().len(), 0);
+    }
+    assert_eq!(fs::read_to_string(dir.path().join("log.1")).unwrap(), "third\n");
+    assert_eq!(fs::read_to_string(dir.path().join("log.2")).unwrap(), "second\n");
+    assert!(!dir.path().join("log.3").exists());
+
+    writeln!(external, "external").unwrap();
+    writeln!(log, "internal").unwrap();
+    assert_eq!(fs::read_to_string(&path).unwrap(), "external\ninternal\n");
+}
+
+#[test]
+fn copy_truncate_keeps_timestamp_order_after_backward_clock_jump() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("log");
+    fs::write(&path, "new log").unwrap();
+    fs::write(dir.path().join("log.29991231T235959.9"), "ninth").unwrap();
+    fs::write(dir.path().join("log.29991231T235959.10"), "tenth").unwrap();
+    mock_time::set_mock_time(get_fake_date_time("2026-09-30T12:00:00"));
+    let mut log = FileRotate::new(
+        &path, AppendTimestamp::default(FileLimit::MaxFiles(2)),
+        ContentLimit::None, Compression::None, None,
+    ).unwrap();
+
+    let copy = log.rotate_copy_truncate().unwrap();
+
+    assert_eq!(copy, dir.path().join("log.29991231T235959.11"));
+    assert_eq!(fs::read_to_string(copy).unwrap(), "new log");
+    assert_eq!(fs::read_to_string(dir.path().join("log.29991231T235959.10")).unwrap(), "tenth");
+    assert!(!dir.path().join("log.29991231T235959.9").exists());
+}
+
+#[test]
+fn copy_truncate_occupied_destination_keeps_source_writable() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("log");
+    let mut log = FileRotate::new(
+        &path, AppendCount::new(2), ContentLimit::None, Compression::None, None,
+    ).unwrap();
+    writeln!(log, "original").unwrap();
+    // Simulate a destination appearing after the directory was scanned.
+    fs::write(dir.path().join("log.1"), "existing copy").unwrap();
+
+    assert_eq!(log.rotate_copy_truncate().unwrap_err().kind(), io::ErrorKind::AlreadyExists);
+    writeln!(log, "still writable").unwrap();
+
+    assert_eq!(fs::read_to_string(&path).unwrap(), "original\nstill writable\n");
+    assert_eq!(fs::read_to_string(dir.path().join("log.1")).unwrap(), "existing copy");
+}
+
+#[cfg(feature = "notify")]
+#[test]
+fn copy_truncate_compresses_and_notifies() {
+    use std::io::Read;
+
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("log");
+    let mut log = FileRotate::new(
+        &path, AppendCount::new(2), ContentLimit::None,
+        Compression::OnRotate { keep_uncompressed: 0, compression: CompressionType::Gzip(6) },
+        None,
+    ).unwrap();
+    let (tx, rx) = crossbeam::channel::unbounded();
+    log.set_notification_channel(Some(tx));
+    writeln!(log, "payload").unwrap();
+
+    log.rotate_copy_truncate().unwrap();
+
+    let compressed = rx.try_recv().unwrap();
+    assert_eq!(compressed, dir.path().join("log.1.gz"));
+    assert!(rx.try_recv().is_err());
+    let mut contents = String::new();
+    flate2::read::GzDecoder::new(File::open(compressed).unwrap()).read_to_string(&mut contents).unwrap();
+    assert_eq!(contents, "payload\n");
+    assert_eq!(fs::metadata(&path).unwrap().len(), 0);
+}
