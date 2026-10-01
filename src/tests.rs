@@ -73,7 +73,7 @@ fn timestamp_max_age_deletion() {
     let log_path = dir.join("log");
 
     // One recent file:
-    let recent_file = Local::now().format("log.%Y%m%dT%H%M%S").to_string();
+    let recent_file = chrono::Utc::now().format("log.%Y%m%dT%H%M%S").to_string();
     File::create(dir.join(&recent_file)).unwrap();
     // Two very old files:
     File::create(dir.join("log.20200825T151133")).unwrap();
@@ -727,7 +727,11 @@ fn test_file_limit() {
     mock_time::set_mock_time(third);
     writeln!(log, "3").unwrap();
 
-    assert_eq!(log.log_paths(), [dir.join("file.2022-02-03")]);
+    let expected = (third - chrono::Duration::days(1))
+        .with_timezone(&chrono::Utc)
+        .format("file.%Y-%m-%d")
+        .to_string();
+    assert_eq!(log.log_paths(), [dir.join(expected)]);
     assert!(!old_file.is_file());
 }
 
@@ -779,8 +783,12 @@ fn timestamp_rotation_after_clock_skew() {
     let dir = tmp_dir.path();
     let log_path = dir.join("log");
 
-    let t1 = get_fake_date_time("2026-02-17T06:14:04");
-    let t2 = get_fake_date_time("2026-02-17T06:14:10");
+    let t1 = DateTime::parse_from_rfc3339("2026-02-17T06:14:04Z")
+        .unwrap()
+        .with_timezone(&Local);
+    let t2 = DateTime::parse_from_rfc3339("2026-02-17T06:14:10Z")
+        .unwrap()
+        .with_timezone(&Local);
 
     mock_time::set_mock_time(t1);
     let mut log = FileRotate::new(
@@ -859,6 +867,12 @@ fn test_time_frequency(
 
     writeln!(log, "c").unwrap();
 
+    let expected_suffix = Local
+        .from_local_datetime(&NaiveDateTime::parse_from_str(test_suffix, "%Y-%m-%d_%H-%M-%S").unwrap())
+        .unwrap()
+        .with_timezone(&chrono::Utc)
+        .format("%Y-%m-%d_%H-%M-%S")
+        .to_string();
     assert!(&log.log_paths()[0].exists());
     assert_eq!(
         log.log_paths()[0]
@@ -867,6 +881,17 @@ fn test_time_frequency(
             .split('.')
             .collect::<Vec<&str>>()
             .last(),
-        Some(&test_suffix)
+        Some(&expected_suffix.as_str())
     );
+}
+
+#[test]
+fn timestamp_suffix_and_retention_use_utc() {
+    let time = DateTime::parse_from_rfc3339("2026-09-30T10:00:00-04:00").unwrap();
+    mock_time::set_mock_time(time.with_timezone(&Local));
+    let mut scheme = AppendTimestamp::default(FileLimit::Age(chrono::Duration::hours(1)));
+    let suffix = scheme.rotate_file(Path::new("log"), None, &None).unwrap();
+    assert_eq!(suffix.timestamp, "20260930T140000");
+    assert!(scheme.too_old(&scheme.parse("20260930T125959").unwrap(), 0));
+    assert!(!scheme.too_old(&scheme.parse("20260930T130000").unwrap(), 0));
 }
