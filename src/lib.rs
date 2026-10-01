@@ -183,6 +183,10 @@
 //! AppendTimestamp::default(FileLimit::Age(chrono::Duration::weeks(1)));
 //! ```
 //!
+//! For logs written through externally owned file handles, use
+//! [FileRotate::rotate_copy_truncate] to preserve the original file rather than
+//! rename it. Coordinate external writes as described on that method.
+//!
 //! # Compression #
 //!
 //! Select a [Compression] mode to make the file rotater compress old files using flate2.
@@ -594,6 +598,7 @@ impl<S: SuffixScheme> FileRotate<S> {
     fn move_file_with_suffix(
         &mut self,
         old_suffix_info: Option<SuffixInfo<S::Repr>>,
+        copy_truncate: bool,
     ) -> io::Result<SuffixInfo<S::Repr>> {
         // NOTE: this newest_suffix is there only because AppendTimestamp specifically needs
         // it. Otherwise it might not be necessary to provide this to `rotate_file`. We could also
@@ -624,7 +629,7 @@ impl<S: SuffixScheme> FileRotate<S> {
             // are equal.
             self.suffixes.replace(new_suffix_info);
             // Recurse to move conflicting file.
-            self.move_file_with_suffix(Some(existing_suffix_info))?
+            self.move_file_with_suffix(Some(existing_suffix_info), false)?
         } else {
             new_suffix_info
         };
@@ -636,8 +641,12 @@ impl<S: SuffixScheme> FileRotate<S> {
 
         // Do the move
         assert!(old_path.exists());
-        assert!(!new_path.exists());
-        fs::rename(old_path, &new_path)?;
+        if copy_truncate {
+            copy_and_truncate(&old_path, &new_path)?;
+        } else {
+            assert!(!new_path.exists());
+            fs::rename(old_path, &new_path)?;
+        }
 
         if let Compression::None = self.compression {
             self.notify_rotated_log_file(new_path);
@@ -649,16 +658,41 @@ impl<S: SuffixScheme> FileRotate<S> {
     /// Trigger a log rotation manually. This is mostly intended for use with `ContentLimit::None`
     /// but will work with all content limits.
     pub fn rotate(&mut self) -> io::Result<PathBuf> {
+        self.rotate_inner(false)
+    }
+
+    /// Copy the current log to a rotated file, then truncate the original in place.
+    /// Handles already open on the original file remain attached to it. External
+    /// writers must use append mode after truncation; otherwise their old offsets
+    /// can leave a gap. Pause writers during this operation to avoid losing writes
+    /// between the end of the copy and truncation.
+    ///
+    /// Uses the configured suffix, retention, compression, and notifications.
+    /// This only changes this explicit rotation; automatic rotation still renames.
+    /// An occupied destination or a failed copy leaves the source untruncated.
+    pub fn rotate_copy_truncate(&mut self) -> io::Result<PathBuf> {
+        self.rotate_inner(true)
+    }
+
+    fn rotate_inner(&mut self, copy_truncate: bool) -> io::Result<PathBuf> {
         self.ensure_log_directory_exists()?;
 
-        let _ = self.file.take();
+        if !copy_truncate {
+            let _ = self.file.take();
+        }
 
         // This function will always create a new file. Returns suffix of that file
-        let new_suffix_info = self.move_file_with_suffix(None)?;
+        let new_suffix_info = self.move_file_with_suffix(None, copy_truncate)?;
         let p = new_suffix_info.to_path(&self.basepath).into();
         self.suffixes.insert(new_suffix_info);
 
-        self.open_file()?;
+        if copy_truncate {
+            if let Some(file) = self.file.as_mut() {
+                file.seek(SeekFrom::Start(0))?;
+            }
+        } else {
+            self.open_file()?;
+        }
 
         self.count = 0;
         self.last_valid_ofs = 0;
@@ -908,6 +942,24 @@ impl<S: SuffixScheme> Write for FileRotate<S> {
             .map(|file| file.flush())
             .unwrap_or(Ok(()))
     }
+}
+
+fn copy_and_truncate(source_path: &Path, destination: &Path) -> io::Result<()> {
+    let mut source = OpenOptions::new().read(true).write(true).open(source_path)?;
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        options.mode(source.metadata()?.permissions().mode());
+    }
+    let mut target = options.open(destination)?;
+    if let Err(error) = io::copy(&mut source, &mut target) {
+        drop(target);
+        let _ = fs::remove_file(destination);
+        return Err(error);
+    }
+    source.set_len(0)
 }
 
 /// Get modification time, in non test case.
