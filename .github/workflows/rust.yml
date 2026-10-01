@@ -2,7 +2,7 @@ name: Rust
 
 on:
   push:
-    branches: [ master ]
+    branches: [ master, make-fallible ]
   pull_request:
     branches: [ master, make-fallible ]
 
@@ -23,7 +23,11 @@ jobs:
         include:
           - os: macos-latest
           - os: ubuntu-latest
-          - os: windows-latest  
+          - os: windows-latest
+          - os: ubuntu-latest
+            timezone: America/New_York
+    env:
+      TZ: ${{ matrix.timezone || 'UTC' }}
     steps:
     - uses: actions/checkout@v3
     - name: Test
