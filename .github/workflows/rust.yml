@@ -2,9 +2,9 @@ name: Rust
 
 on:
   push:
-    branches: [ master, make-fallible ]
+    branches: [ master, make-fallible, main ]
   pull_request:
-    branches: [ master, make-fallible ]
+    branches: [ master, make-fallible, main ]
 
 env:
   CARGO_TERM_COLOR: always
