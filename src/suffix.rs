@@ -95,13 +95,12 @@ pub trait SuffixScheme {
                     compression_suffix,
                 };
                 // If an entry with the same suffix is already in the set, both the uncompressed
-                // and compressed variants exist on disk — a prior run crashed somewhere in
-                // compress(). Prefer the uncompressed source and delete the compressed variant:
-                // compress() writes the destination in place (no tmp+rename), so a crash between
-                // opening dest and encoder.finish() leaves a truncated / partial-frame archive
-                // beside the intact source. Keeping the source lets handle_old_files re-compress
-                // it cleanly on the next rotation; keeping the archive risks shipping a corrupt
-                // file. Preserves the "one entry per suffix" invariant.
+                // and compressed variants exist on disk — a prior run crashed inside compress(),
+                // between renaming the finished archive into place and removing the source.
+                // Prefer the uncompressed source and delete the compressed variant: both hold the
+                // same rotation, so re-compressing the source on the next rotation costs a little
+                // work and asks nothing of the leftover archive. Preserves the "one entry per
+                // suffix" invariant.
                 if let Some(existing) = suffixes.get(&candidate).cloned() {
                     let (winner, loser) = if candidate.compression_suffix.is_none() {
                         (candidate, existing)
